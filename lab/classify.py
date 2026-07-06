@@ -23,7 +23,7 @@ STOP_WORDS = {
     "for", "what", "can", "all", "was", "one", "its",
 }
 
-DEFAULT_MODEL = "anthropic/claude-3.5-haiku"
+DEFAULT_MODEL = "deepseek/deepseek-chat-v4-flash"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
 CLASSIFY_SYSTEM_PROMPT = """You are an expert content classifier. Given a markdown essay, classify it into
