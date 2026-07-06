@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from lab.classify import run_pipeline
 from lab.runtime import DEFAULT_FIXTURE, ROOT, summarize_fixture, validate_contract
 
 
@@ -44,6 +45,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=ROOT / "contracts" / "prompt_contract.schema.json",
     )
 
+    classify = subparsers.add_parser("classify", help="Classify markdown essays")
+    classify.add_argument(
+        "dir", type=Path, nargs="?", default=Path.cwd(),
+        help="Directory containing markdown essays (default: current)"
+    )
+    classify.add_argument("--threshold", type=float, default=0.75,
+                          help="Classification confidence threshold")
+    classify.add_argument("--cluster-threshold", type=float, default=0.75,
+                          help="Clustering distance threshold")
+    classify.add_argument("--execute", action="store_true",
+                          help="Execute the move plan")
+    classify.add_argument("--yes", "-y", action="store_true",
+                          help="Skip confirmation prompts")
+    classify.add_argument("--resume", action="store_true",
+                          help="Resume from the highest completed pass")
+    classify.add_argument("--from-pass", type=int, default=None,
+                          help="Resume from a specific pass (1-5)")
+    classify.add_argument("--json", action="store_true",
+                          help="Output as JSON")
+
     return parser
 
 
@@ -61,6 +82,25 @@ def main(argv: list[str] | None = None) -> int:
         summary["domain"] = args.domain
         summary["command"] = args.command
         return _print(summary)
+
+    if args.domain == "classify":
+        result = run_pipeline(
+            Path(args.dir),
+            threshold=args.threshold,
+            cluster_threshold=args.cluster_threshold,
+            execute=args.execute,
+            assume_yes=args.yes,
+            resume=args.resume,
+            from_pass=args.from_pass,
+        )
+        if args.json:
+            return _print(result)
+        print(f"Essays: {result['fingerprints']}")
+        print(f"Embeddings: {result['embeddings']}")
+        print(f"Clusters: {result['clusters']} ({result['cluster_count']} groups, {result['outliers']} outliers)")
+        print(f"Classifications: {result['classifications']}")
+        print(f"Move plan entries: {result['move_plan']}")
+        return 0
 
     if args.domain == "contract" and args.command == "validate":
         result = validate_contract(args.path)
