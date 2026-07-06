@@ -24,7 +24,6 @@ evals/              fixtures and regression-oriented evaluation inputs
 prompts/            versioned prompt assets
 benchmarks/         provider and model comparison artifacts
 contracts/          prompt and runtime contract definitions
-archive/legacy_api/ retired FastAPI-era product backend snapshot
 ```
 
 ## Quick start
@@ -44,8 +43,4 @@ python -m lab.cli contract validate contracts/prompt_contract.schema.json
   reintroduce a monolithic product API here.
 - Experiments must be regression-testable through fixtures and contracts.
 
-## Legacy code
 
-The previous FastAPI application, routers, prompts, and tests have been moved to
-`archive/legacy_api/` so the old product surface remains inspectable without
-competing with the new lab charter.
