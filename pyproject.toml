@@ -8,7 +8,10 @@ version = "0.2.0"
 description = "Ponti Studios internal AI lab for workers, pipelines, evals, prompts, and benchmarks."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "openai>=2.44.0",
+    "python-dotenv>=1.2.2",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]

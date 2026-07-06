@@ -1,11 +1,9 @@
-"""Essay classification pipeline — ported from toolbox/apps/filekit/src/classify.rs.
+"""Essay classification pipeline — LLM-powered domain classification.
 
-Five-pass pipeline:
+Three-pass pipeline:
   Pass 1 — fingerprint: scan markdown files, extract features
-  Pass 2 — embed: generate hash-based embeddings
-  Pass 3 — cluster: single-pass cosine-distance clustering
-  Pass 4 — classify: domain classification from title/keywords
-  Pass 5 — move plan: generate target paths
+  Pass 2 — classify: LLM-powered domain classification via OpenAI-compatible API
+  Pass 3 — move plan: generate target paths from classifications
 """
 
 from __future__ import annotations
@@ -13,27 +11,35 @@ from __future__ import annotations
 import json
 import os
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
+import openai
+
 MAX_INTRO_WORDS = 500
-MAX_CLOSING_WORDS = 200
-EMBEDDING_DIM = 16
 STOP_WORDS = {
     "the", "and", "with", "that", "this", "from", "have",
     "will", "your", "into", "more", "are", "not", "but",
     "for", "what", "can", "all", "was", "one", "its",
 }
 
-DOMAIN_RULES: list[tuple[str, list[str]]] = [
-    ("technology", ["rust", "go", "python", "cli", "api", "code", "software"]),
-    ("science", ["research", "data", "model", "analysis", "experiment"]),
-    ("writing", ["essay", "write", "writing", "draft", "prose"]),
-    ("product", ["product", "roadmap", "feature", "workflow"]),
-    ("design", ["design", "ui", "ux", "interface"]),
-    ("business", ["business", "strategy", "market", "revenue"]),
-    ("personal", ["journal", "personal", "life", "note"]),
-]
+CLASSIFY_SYSTEM_PROMPT = """You are an expert content classifier. Given a markdown essay, classify it into
+1-3 domain tags that describe its primary subject matter. Use lowercase kebab-case
+tags like "rust-programming", "product-strategy", "personal-journal", "ai-research".
+
+Respond ONLY with a JSON object:
+{
+  "domains": ["primary", "secondary", "tertiary"],
+  "confidence": 0.0-1.0,
+  "reasoning": "brief explanation",
+  "needs_review": true/false
+}
+
+Rules:
+- Domains should be descriptive, not generic. Prefer "postgres-tuning" over "database".
+- If the content spans multiple equal-weighted topics, list up to 3.
+- Set needs_review=true if the content is ambiguous, very short, or doesn't fit clear domains.
+- confidence = how sure you are about the primary domain classification."""
 
 
 @dataclass
@@ -44,33 +50,17 @@ class Fingerprint:
     title: str
     headings: list[str]
     intro_excerpt: str
-    closing_excerpt: str
     keywords: list[str]
     word_count: int
 
 
 @dataclass
-class Embedding:
-    id: str
-    vector: list[float]
-
-
-@dataclass
-class ClusterResult:
-    id: str
-    cluster_id: int
-    is_outlier: bool
-    distance: float
-
-
-@dataclass
 class Classification:
     id: str
-    primary_domain: str
-    secondary_domain: str | None = None
-    confidence: float = 0.0
-    reason: str = ""
-    needs_full_text_review: bool = False
+    domains: list[str]
+    confidence: float
+    reasoning: str
+    needs_review: bool
 
 
 @dataclass
@@ -84,7 +74,6 @@ class MoveEntry:
 
 
 def _count_words(s: str) -> int:
-    """Count words in a string."""
     in_word = False
     count = 0
     for ch in s:
@@ -98,7 +87,6 @@ def _count_words(s: str) -> int:
 
 
 def _extract_title(content: str) -> str:
-    """Extract H1 title from markdown."""
     for line in content.splitlines()[:10]:
         line = line.strip()
         if line.startswith("# "):
@@ -107,7 +95,6 @@ def _extract_title(content: str) -> str:
 
 
 def _extract_headings(content: str) -> list[str]:
-    """Extract H2 headings."""
     return [
         line.strip()[3:].strip()
         for line in content.splitlines()
@@ -116,7 +103,6 @@ def _extract_headings(content: str) -> list[str]:
 
 
 def _extract_intro(content: str) -> str:
-    """Extract the opening text (first ~500 words, excluding headings and code)."""
     out: list[str] = []
     words = 0
     in_code = False
@@ -132,28 +118,10 @@ def _extract_intro(content: str) -> str:
             break
         out.append(trimmed)
         words += wc
-    return " ".join(out)
-
-
-def _extract_closing(content: str) -> str:
-    """Extract the closing text (last ~200 words)."""
-    out: list[str] = []
-    words = 0
-    for line in reversed(content.splitlines()):
-        trimmed = line.strip()
-        if not trimmed or trimmed.startswith("`") or trimmed.startswith("#"):
-            continue
-        wc = _count_words(trimmed)
-        if words + wc > MAX_CLOSING_WORDS:
-            break
-        out.append(trimmed)
-        words += wc
-    out.reverse()
-    return " ".join(out)
+    return "\n".join(out)
 
 
 def _extract_keywords(content: str) -> list[str]:
-    """Extract top keywords by frequency (non-stopwords, minimum 4 chars)."""
     tokens: list[str] = []
     for token in content.split():
         token = "".join(c for c in token.lower() if c.isalnum() or c == "-")
@@ -161,10 +129,8 @@ def _extract_keywords(content: str) -> list[str]:
             continue
         tokens.append(token)
     freq = Counter(tokens)
-    return [word for word, count in freq.most_common(20) if count >= 2]
+    return [word for word, count in freq.most_common(15) if count >= 2]
 
-
-# ── Pass 1: Scan & Fingerprint ──────────────────────────────────────────────
 
 def scan_directory(root: Path) -> list[Fingerprint]:
     """Scan a directory tree for markdown files and create fingerprints."""
@@ -186,7 +152,6 @@ def scan_directory(root: Path) -> list[Fingerprint]:
                 title=_extract_title(content),
                 headings=_extract_headings(content),
                 intro_excerpt=_extract_intro(content),
-                closing_excerpt=_extract_closing(content),
                 keywords=_extract_keywords(content),
                 word_count=_count_words(content),
             )
@@ -194,129 +159,108 @@ def scan_directory(root: Path) -> list[Fingerprint]:
     return fingerprints
 
 
-# ── Pass 2: Embed ────────────────────────────────────────────────────────────
+def _build_client(
+    api_key: str | None = None,
+    base_url: str | None = None,
+) -> openai.OpenAI:
+    """Build an OpenAI-compatible client from env vars or explicit config."""
+    # Load .env if not already done (safe no-op if already loaded)
+    try:
+        from dotenv import load_dotenv as _load  # noqa: F811
+        _load()
+    except ImportError:
+        pass
 
-def _build_embedding_text(fp: Fingerprint) -> str:
-    parts = [fp.filename, fp.title]
-    parts.extend(fp.headings)
-    parts.append(fp.intro_excerpt)
-    parts.append(fp.closing_excerpt)
-    parts.extend(fp.keywords)
-    return " ".join(parts)
-
-
-def _build_embedding_vector(fp: Fingerprint) -> list[float]:
-    """Generate a 16-dim hash-based embedding vector."""
-    text = _build_embedding_text(fp)
-    vec = [0.0] * EMBEDDING_DIM
-    tokens = [t for t in text.split() if t]
-
-    for i, token in enumerate(tokens):
-        h = 0
-        for b in token.encode():
-            h = (h * 31 + b) & 0xFFFFFFFFFFFFFFFF
-        idx = h % EMBEDDING_DIM
-        vec[idx] += 1.0 + (i % 7) * 0.1
-
-    # Normalize
-    norm = sum(v * v for v in vec) ** 0.5
-    if norm > 0:
-        vec = [v / norm for v in vec]
-
-    return vec
-
-
-def generate_embeddings(fingerprints: list[Fingerprint]) -> list[Embedding]:
-    return [
-        Embedding(id=fp.id, vector=_build_embedding_vector(fp))
-        for fp in fingerprints
-    ]
-
-
-# ── Pass 3: Cluster ─────────────────────────────────────────────────────────
-
-def _cosine_distance(a: list[float], b: list[float]) -> float:
-    """Cosine distance between two vectors (1 - cosine similarity)."""
-    length = min(len(a), len(b))
-    if length == 0:
-        return 1.0
-    dot = sum(a[i] * b[i] for i in range(length))
-    na = sum(x * x for x in a) ** 0.5
-    nb = sum(x * x for x in b) ** 0.5
-    if na == 0.0 or nb == 0.0:
-        return 1.0
-    return 1.0 - (dot / (na * nb))
-
-
-def cluster_embeddings(
-    embeddings: list[Embedding], threshold: float = 0.75
-) -> list[ClusterResult]:
-    """Single-pass clustering with cosine distance threshold."""
-    results: list[ClusterResult] = []
-    for i, emb in enumerate(embeddings):
-        best_cluster = i
-        best_distance = float("inf")
-        for j in range(i):
-            dist = _cosine_distance(emb.vector, embeddings[j].vector)
-            if dist < best_distance:
-                best_distance = dist
-                best_cluster = results[j].cluster_id
-
-        is_outlier = best_distance == float("inf") or best_distance > threshold
-        results.append(
-            ClusterResult(
-                id=emb.id,
-                cluster_id=-1 if is_outlier else best_cluster,
-                is_outlier=is_outlier,
-                distance=best_distance if best_distance != float("inf") else 0.0,
-            )
+    key = api_key or os.environ.get("OPENAI_API_KEY", "")
+    url = base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    if not key:
+        raise ValueError(
+            "No API key provided. Set OPENAI_API_KEY env var or pass --api-key."
         )
-    return results
+    return openai.OpenAI(api_key=key, base_url=url)
 
 
-# ── Pass 4: Classify ────────────────────────────────────────────────────────
+def _classify_essay(
+    client: openai.OpenAI,
+    fp: Fingerprint,
+    model: str,
+) -> Classification:
+    """Classify a single essay using an LLM."""
+    prompt = f"""Title: {fp.title or '(untitled)'}
+Filename: {fp.filename}
+Headings: {', '.join(fp.headings[:5]) if fp.headings else '(none)'}
+Keywords: {', '.join(fp.keywords[:10]) if fp.keywords else '(none)'}
+Word count: {fp.word_count}
 
-def _infer_domain(title: str, keywords: list[str], cluster_id: int) -> str:
-    """Classify an essay into a domain using heuristic keyword rules."""
-    haystack = f"{title.lower()} {' '.join(keywords).lower()}"
-    for domain, terms in DOMAIN_RULES:
-        if any(term in haystack for term in terms):
-            return domain
-    if cluster_id >= 0:
-        return f"cluster-{cluster_id}"
-    return "unclear"
+Content excerpt:
+{fp.intro_excerpt[:2000]}"""
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": CLASSIFY_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.1,
+        max_tokens=300,
+        response_format={"type": "json_object"},
+    )
+
+    raw = response.choices[0].message.content
+    if not raw:
+        return Classification(
+            id=fp.id,
+            domains=["unclassified"],
+            confidence=0.0,
+            reasoning="LLM returned empty response",
+            needs_review=True,
+        )
+
+    try:
+        data = json.loads(raw)
+        return Classification(
+            id=fp.id,
+            domains=data.get("domains", ["unclassified"]),
+            confidence=float(data.get("confidence", 0.0)),
+            reasoning=str(data.get("reasoning", "")),
+            needs_review=bool(data.get("needs_review", False)),
+        )
+    except (json.JSONDecodeError, KeyError, ValueError):
+        return Classification(
+            id=fp.id,
+            domains=["unclassified"],
+            confidence=0.0,
+            reasoning=f"Failed to parse LLM response: {raw[:200]}",
+            needs_review=True,
+        )
 
 
 def classify_essays(
     fingerprints: list[Fingerprint],
-    clusters: list[ClusterResult],
-    threshold: float = 0.75,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str = "gpt-4o-mini",
 ) -> list[Classification]:
-    """Classify fingerprints using cluster data and domain heuristics."""
-    fp_map = {fp.id: fp for fp in fingerprints}
+    """Classify a batch of essays using an LLM."""
+    client = _build_client(api_key=api_key, base_url=base_url)
     results: list[Classification] = []
-    for cluster in clusters:
-        fp = fp_map.get(cluster.id)
-        title = fp.title if fp else ""
-        keywords = fp.keywords if fp else []
-        domain = _infer_domain(title, keywords, cluster.cluster_id)
-        confidence = 0.35 if cluster.is_outlier else max(1.0 - cluster.distance, 0.0)
-        results.append(
-            Classification(
-                id=cluster.id,
-                primary_domain=domain,
-                secondary_domain=None,
-                confidence=confidence,
-                reason="low cluster confidence"
-                if cluster.is_outlier
-                else "heuristic classification from title/keywords",
-                needs_full_text_review=cluster.is_outlier or cluster.distance > threshold,
+    for i, fp in enumerate(fingerprints):
+        try:
+            classification = _classify_essay(client, fp, model)
+        except Exception as exc:
+            classification = Classification(
+                id=fp.id,
+                domains=["error"],
+                confidence=0.0,
+                reasoning=f"LLM call failed: {exc}",
+                needs_review=True,
             )
-        )
+        results.append(classification)
+        if (i + 1) % 10 == 0:
+            print(f"  Classified {i + 1}/{len(fingerprints)}...")
     return results
 
-
-# ── Pass 5: Move Plan ───────────────────────────────────────────────────────
 
 def generate_move_plan(
     fingerprints: list[Fingerprint],
@@ -329,7 +273,7 @@ def generate_move_plan(
         fp = fp_map.get(c.id)
         if not fp:
             continue
-        domain = c.primary_domain or "unclear"
+        domain = c.domains[0] if c.domains else "unclassified"
         target = str(Path(domain) / fp.filename)
         plan.append(
             MoveEntry(
@@ -338,97 +282,90 @@ def generate_move_plan(
                 target=target,
                 domain=domain,
                 confidence=c.confidence,
-                reason=c.reason,
+                reason=c.reasoning,
             )
         )
     return plan
 
 
-# ── Full Pipeline ────────────────────────────────────────────────────────────
-
 def run_pipeline(
     target_dir: Path,
     *,
-    threshold: float = 0.75,
-    cluster_threshold: float = 0.75,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str = "gpt-4o-mini",
     execute: bool = False,
     assume_yes: bool = False,
     resume: bool = False,
     from_pass: int | None = None,
 ) -> dict:
-    """Run the full 5-pass classification pipeline.
+    """Run the LLM-powered classification pipeline.
 
-    Returns a dict with keys: fingerprints, embeddings, clusters, classifications, move_plan.
+    Returns a dict with keys: fingerprints, classifications, move_plan.
     """
     state_dir = target_dir / ".filekit" / "classify"
     state_dir.mkdir(parents=True, exist_ok=True)
 
     pass1_path = state_dir / "pass1_fingerprints.json"
-    pass2_path = state_dir / "pass2_embeddings.json"
-    pass3_path = state_dir / "pass3_clusters.json"
-    pass4_path = state_dir / "pass4_classifications.json"
-    pass5_path = state_dir / "move_plan.json"
+    pass2_path = state_dir / "pass2_classifications.json"
+    pass3_path = state_dir / "move_plan.json"
 
     start_pass = from_pass or (2 if resume else 1)
-    start_pass = max(1, min(start_pass, 5))
+    start_pass = max(1, min(start_pass, 3))
 
     # Pass 1: Fingerprint
     if start_pass > 1 and pass1_path.exists():
         raw = json.loads(pass1_path.read_text())
         fingerprints = [Fingerprint(**fp) for fp in raw["fingerprints"]]
+        print(f"Resumed: loaded {len(fingerprints)} fingerprints")
     else:
         fingerprints = scan_directory(target_dir)
         pass1_path.write_text(
-            json.dumps({"fingerprints": [fp.__dict__ for fp in fingerprints]}, indent=2)
+            json.dumps(
+                {"fingerprints": [fp.__dict__ for fp in fingerprints]}, indent=2
+            )
         )
+        print(f"Pass 1: scanned {len(fingerprints)} essays")
 
-    # Pass 2: Embed
+    # Pass 2: LLM Classification
     if start_pass > 2 and pass2_path.exists():
         raw = json.loads(pass2_path.read_text())
-        embeddings = [Embedding(**e) for e in raw["embeddings"]]
-    else:
-        embeddings = generate_embeddings(fingerprints)
-        pass2_path.write_text(
-            json.dumps({"embeddings": [e.__dict__ for e in embeddings]}, indent=2)
-        )
-
-    # Pass 3: Cluster
-    if start_pass > 3 and pass3_path.exists():
-        raw = json.loads(pass3_path.read_text())
-        clusters = [ClusterResult(**c) for c in raw]
-    else:
-        clusters = cluster_embeddings(embeddings, cluster_threshold)
-        pass3_path.write_text(
-            json.dumps([c.__dict__ for c in clusters], indent=2)
-        )
-
-    # Pass 4: Classify
-    if start_pass > 4 and pass4_path.exists():
-        raw = json.loads(pass4_path.read_text())
         classifications = [Classification(**c) for c in raw]
+        print(f"Resumed: loaded {len(classifications)} classifications")
     else:
-        classifications = classify_essays(fingerprints, clusters, threshold)
-        pass4_path.write_text(
+        print(f"Pass 2: classifying {len(fingerprints)} essays via {model}...")
+        classifications = classify_essays(
+            fingerprints,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+        )
+        pass2_path.write_text(
             json.dumps([c.__dict__ for c in classifications], indent=2)
         )
+        domains = Counter(d for c in classifications for d in c.domains)
+        print(f"  Discovered {len(domains)} domains: {', '.join(d for d, _ in domains.most_common(10))}")
 
-    # Pass 5: Move Plan
-    if start_pass > 5 and pass5_path.exists():
-        raw = json.loads(pass5_path.read_text())
+    # Pass 3: Move Plan
+    if start_pass > 3 and pass3_path.exists():
+        raw = json.loads(pass3_path.read_text())
         move_plan = [MoveEntry(**m) for m in raw]
+        print(f"Resumed: loaded {len(move_plan)} move plan entries")
     else:
         move_plan = generate_move_plan(fingerprints, classifications)
-        pass5_path.write_text(
+        pass3_path.write_text(
             json.dumps([m.__dict__ for m in move_plan], indent=2)
         )
+        print(f"Pass 3: generated {len(move_plan)} move plan entries")
+
+    needs_review = sum(1 for c in classifications if c.needs_review)
+    all_domains = Counter(d for c in classifications for d in c.domains)
 
     result = {
         "fingerprints": len(fingerprints),
-        "embeddings": len(embeddings),
-        "clusters": len(clusters),
-        "cluster_count": len({c.cluster_id for c in clusters}),
-        "outliers": sum(1 for c in clusters if c.is_outlier),
         "classifications": len(classifications),
+        "needs_review": needs_review,
+        "domains": dict(all_domains.most_common()),
         "move_plan": len(move_plan),
     }
 
@@ -447,7 +384,7 @@ def _execute_move(
         print("No move plan entries to execute.")
         return
 
-    print(f"Executing move plan: {len(plan)} files")
+    print(f"\nExecuting move plan: {len(plan)} files")
     if not assume_yes:
         response = input("Execute? [y/N] ").strip().lower()
         if response not in ("y", "yes"):

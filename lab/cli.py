@@ -4,8 +4,12 @@ import argparse
 import json
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from lab.classify import run_pipeline
 from lab.runtime import DEFAULT_FIXTURE, ROOT, summarize_fixture, validate_contract
+
+load_dotenv()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,15 +49,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=ROOT / "contracts" / "prompt_contract.schema.json",
     )
 
-    classify = subparsers.add_parser("classify", help="Classify markdown essays")
+    classify = subparsers.add_parser("classify", help="Classify markdown essays via LLM")
     classify.add_argument(
         "dir", type=Path, nargs="?", default=Path.cwd(),
         help="Directory containing markdown essays (default: current)"
     )
-    classify.add_argument("--threshold", type=float, default=0.75,
-                          help="Classification confidence threshold")
-    classify.add_argument("--cluster-threshold", type=float, default=0.75,
-                          help="Clustering distance threshold")
+    classify.add_argument("--api-key", help="OpenAI-compatible API key (or set OPENAI_API_KEY)")
+    classify.add_argument("--base-url", help="API base URL (or set OPENAI_BASE_URL)")
+    classify.add_argument("--model", default="gpt-4o-mini",
+                          help="Model name (default: gpt-4o-mini)")
     classify.add_argument("--execute", action="store_true",
                           help="Execute the move plan")
     classify.add_argument("--yes", "-y", action="store_true",
@@ -61,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     classify.add_argument("--resume", action="store_true",
                           help="Resume from the highest completed pass")
     classify.add_argument("--from-pass", type=int, default=None,
-                          help="Resume from a specific pass (1-5)")
+                          help="Resume from a specific pass (1-3)")
     classify.add_argument("--json", action="store_true",
                           help="Output as JSON")
 
@@ -86,8 +90,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.domain == "classify":
         result = run_pipeline(
             Path(args.dir),
-            threshold=args.threshold,
-            cluster_threshold=args.cluster_threshold,
+            api_key=args.api_key,
+            base_url=args.base_url,
+            model=args.model,
             execute=args.execute,
             assume_yes=args.yes,
             resume=args.resume,
@@ -96,9 +101,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             return _print(result)
         print(f"Essays: {result['fingerprints']}")
-        print(f"Embeddings: {result['embeddings']}")
-        print(f"Clusters: {result['clusters']} ({result['cluster_count']} groups, {result['outliers']} outliers)")
         print(f"Classifications: {result['classifications']}")
+        print(f"Needs review: {result['needs_review']}")
+        print(f"Domains discovered: {len(result['domains'])}")
+        for domain, count in sorted(result['domains'].items(), key=lambda x: -x[1])[:10]:
+            print(f"  {domain}: {count}")
         print(f"Move plan entries: {result['move_plan']}")
         return 0
 
