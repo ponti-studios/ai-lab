@@ -24,6 +24,15 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+def ensure_model(conn: sqlite3.Connection, model_id: str) -> None:
+    """Insert a model if it doesn't already exist."""
+    conn.execute(
+        "INSERT OR IGNORE INTO models (provider, model_id, display_name) VALUES (?, ?, ?)",
+        (model_id.split("/")[0], model_id, model_id),
+    )
+    conn.commit()
+
+
 def save_classification(
     conn: sqlite3.Connection,
     *,
@@ -38,6 +47,8 @@ def save_classification(
     model_id: str | None = None,
 ) -> int:
     """Save an essay classification result."""
+    if model_id:
+        ensure_model(conn, model_id)
     conn.execute(
         """
         INSERT INTO essay_classifications

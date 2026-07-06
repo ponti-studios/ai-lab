@@ -18,12 +18,30 @@ import openai
 
 MAX_INTRO_WORDS = 500
 STOP_WORDS = {
-    "the", "and", "with", "that", "this", "from", "have",
-    "will", "your", "into", "more", "are", "not", "but",
-    "for", "what", "can", "all", "was", "one", "its",
+    "the",
+    "and",
+    "with",
+    "that",
+    "this",
+    "from",
+    "have",
+    "will",
+    "your",
+    "into",
+    "more",
+    "are",
+    "not",
+    "but",
+    "for",
+    "what",
+    "can",
+    "all",
+    "was",
+    "one",
+    "its",
 }
 
-DEFAULT_MODEL = "deepseek/deepseek-chat-v4-flash"
+DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
 CLASSIFY_SYSTEM_PROMPT = """You are an expert content classifier. Given a markdown essay, classify it into
@@ -139,8 +157,7 @@ def scan_directory(root: Path) -> list[Fingerprint]:
     """Scan a directory tree for markdown files and create fingerprints."""
     root = root.resolve()
     files = sorted(
-        p for p in root.rglob("*.md")
-        if ".filekit" not in p.parts and p.is_file()
+        p for p in root.rglob("*.md") if ".filekit" not in p.parts and p.is_file()
     )
 
     fingerprints: list[Fingerprint] = []
@@ -170,11 +187,16 @@ def _build_client(
     # Load .env if not already done (safe no-op if already loaded)
     try:
         from dotenv import load_dotenv as _load  # noqa: F811
+
         _load()
     except ImportError:
         pass
 
-    key = api_key or os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
+    key = (
+        api_key
+        or os.environ.get("OPENROUTER_API_KEY")
+        or os.environ.get("OPENAI_API_KEY", "")
+    )
     url = base_url or os.environ.get("OPENAI_BASE_URL", DEFAULT_BASE_URL)
     if not key:
         raise ValueError(
@@ -189,10 +211,10 @@ def _classify_essay(
     model: str,
 ) -> Classification:
     """Classify a single essay using an LLM."""
-    prompt = f"""Title: {fp.title or '(untitled)'}
+    prompt = f"""Title: {fp.title or "(untitled)"}
 Filename: {fp.filename}
-Headings: {', '.join(fp.headings[:5]) if fp.headings else '(none)'}
-Keywords: {', '.join(fp.keywords[:10]) if fp.keywords else '(none)'}
+Headings: {", ".join(fp.headings[:5]) if fp.headings else "(none)"}
+Keywords: {", ".join(fp.keywords[:10]) if fp.keywords else "(none)"}
 Word count: {fp.word_count}
 
 Content excerpt:
@@ -324,9 +346,7 @@ def run_pipeline(
     else:
         fingerprints = scan_directory(target_dir)
         pass1_path.write_text(
-            json.dumps(
-                {"fingerprints": [fp.__dict__ for fp in fingerprints]}, indent=2
-            )
+            json.dumps({"fingerprints": [fp.__dict__ for fp in fingerprints]}, indent=2)
         )
         print(f"Pass 1: scanned {len(fingerprints)} essays")
 
@@ -347,7 +367,9 @@ def run_pipeline(
             json.dumps([c.__dict__ for c in classifications], indent=2)
         )
         domains = Counter(d for c in classifications for d in c.domains)
-        print(f"  Discovered {len(domains)} domains: {', '.join(d for d, _ in domains.most_common(10))}")
+        print(
+            f"  Discovered {len(domains)} domains: {', '.join(d for d, _ in domains.most_common(10))}"
+        )
 
     # Pass 3: Move Plan
     if start_pass > 3 and pass3_path.exists():
@@ -356,9 +378,7 @@ def run_pipeline(
         print(f"Resumed: loaded {len(move_plan)} move plan entries")
     else:
         move_plan = generate_move_plan(fingerprints, classifications)
-        pass3_path.write_text(
-            json.dumps([m.__dict__ for m in move_plan], indent=2)
-        )
+        pass3_path.write_text(json.dumps([m.__dict__ for m in move_plan], indent=2))
         print(f"Pass 3: generated {len(move_plan)} move plan entries")
 
     needs_review = sum(1 for c in classifications if c.needs_review)
@@ -376,8 +396,11 @@ def run_pipeline(
         _execute_move(target_dir, move_plan, assume_yes)
         result["executed"] = True
 
-    # Persist to shared lab database
-    _save_to_db(fingerprints, classifications, model)
+    # Persist to lab database (best-effort, never kills the pipeline)
+    try:
+        _save_to_db(fingerprints, classifications, model)
+    except Exception as exc:
+        print(f"  Warning: failed to persist to lab.db: {exc}")
 
     return result
 
@@ -387,7 +410,7 @@ def _save_to_db(
     classifications: list[Classification],
     model: str,
 ) -> None:
-    """Persist classification results to the shared lab database."""
+    """Persist classification results to the lab database."""
     from lab.db import connect, save_classification
 
     fp_map = {fp.id: fp for fp in fingerprints}
@@ -409,14 +432,12 @@ def _save_to_db(
                 needs_review=c.needs_review,
                 model_id=model,
             )
-        print(f"Saved {len(classifications)} classifications to lab.db")
+        print(f"  Saved {len(classifications)} classifications to lab.db")
     finally:
         conn.close()
 
 
-def _execute_move(
-    source_dir: Path, plan: list[MoveEntry], assume_yes: bool
-) -> None:
+def _execute_move(source_dir: Path, plan: list[MoveEntry], assume_yes: bool) -> None:
     """Execute a move plan by renaming files."""
     if not plan:
         print("No move plan entries to execute.")
