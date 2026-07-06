@@ -6,7 +6,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from lab.classify import run_pipeline
+from lab.classify import DEFAULT_BASE_URL, DEFAULT_MODEL, run_pipeline
 from lab.runtime import DEFAULT_FIXTURE, ROOT, summarize_fixture, validate_contract
 
 load_dotenv()
@@ -55,9 +55,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory containing markdown essays (default: current)"
     )
     classify.add_argument("--api-key", help="OpenAI-compatible API key (or set OPENAI_API_KEY)")
-    classify.add_argument("--base-url", help="API base URL (or set OPENAI_BASE_URL)")
-    classify.add_argument("--model", default="gpt-4o-mini",
-                          help="Model name (default: gpt-4o-mini)")
+    classify.add_argument("--base-url", help=f"API base URL (default: {DEFAULT_BASE_URL})")
+    classify.add_argument("--model", default=DEFAULT_MODEL,
+                          help=f"Model name (default: {DEFAULT_MODEL})")
     classify.add_argument("--execute", action="store_true",
                           help="Execute the move plan")
     classify.add_argument("--yes", "-y", action="store_true",

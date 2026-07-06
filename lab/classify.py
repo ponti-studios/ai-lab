@@ -23,6 +23,9 @@ STOP_WORDS = {
     "for", "what", "can", "all", "was", "one", "its",
 }
 
+DEFAULT_MODEL = "anthropic/claude-3.5-haiku"
+DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+
 CLASSIFY_SYSTEM_PROMPT = """You are an expert content classifier. Given a markdown essay, classify it into
 1-3 domain tags that describe its primary subject matter. Use lowercase kebab-case
 tags like "rust-programming", "product-strategy", "personal-journal", "ai-research".
@@ -171,8 +174,8 @@ def _build_client(
     except ImportError:
         pass
 
-    key = api_key or os.environ.get("OPENAI_API_KEY", "")
-    url = base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    key = api_key or os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
+    url = base_url or os.environ.get("OPENAI_BASE_URL", DEFAULT_BASE_URL)
     if not key:
         raise ValueError(
             "No API key provided. Set OPENAI_API_KEY env var or pass --api-key."
@@ -240,7 +243,7 @@ def classify_essays(
     *,
     api_key: str | None = None,
     base_url: str | None = None,
-    model: str = "gpt-4o-mini",
+    model: str = DEFAULT_MODEL,
 ) -> list[Classification]:
     """Classify a batch of essays using an LLM."""
     client = _build_client(api_key=api_key, base_url=base_url)
@@ -293,7 +296,7 @@ def run_pipeline(
     *,
     api_key: str | None = None,
     base_url: str | None = None,
-    model: str = "gpt-4o-mini",
+    model: str = DEFAULT_MODEL,
     execute: bool = False,
     assume_yes: bool = False,
     resume: bool = False,
