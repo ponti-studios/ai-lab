@@ -376,7 +376,42 @@ def run_pipeline(
         _execute_move(target_dir, move_plan, assume_yes)
         result["executed"] = True
 
+    # Persist to shared lab database
+    _save_to_db(fingerprints, classifications, model)
+
     return result
+
+
+def _save_to_db(
+    fingerprints: list[Fingerprint],
+    classifications: list[Classification],
+    model: str,
+) -> None:
+    """Persist classification results to the shared lab database."""
+    from lab.db import connect, save_classification
+
+    fp_map = {fp.id: fp for fp in fingerprints}
+    conn = connect()
+    try:
+        for c in classifications:
+            fp = fp_map.get(c.id)
+            if not fp:
+                continue
+            save_classification(
+                conn,
+                filename=fp.filename,
+                relative_path=fp.relative_path,
+                title=fp.title,
+                word_count=fp.word_count,
+                domains=c.domains,
+                confidence=c.confidence,
+                reasoning=c.reasoning,
+                needs_review=c.needs_review,
+                model_id=model,
+            )
+        print(f"Saved {len(classifications)} classifications to lab.db")
+    finally:
+        conn.close()
 
 
 def _execute_move(
