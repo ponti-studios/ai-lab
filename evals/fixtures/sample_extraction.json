@@ -1,0 +1,16 @@
+{
+  "document_id": "sample-intake-packet",
+  "inputs": {
+    "document_type": "intake_packet",
+    "text": "Name: Ada Lovelace\nPriority: urgent\nNeed: income verification"
+  },
+  "expected": {
+    "name": "Ada Lovelace",
+    "priority": "urgent",
+    "need": "income verification"
+  },
+  "models": [
+    "gpt-5",
+    "gpt-5-mini"
+  ]
+}

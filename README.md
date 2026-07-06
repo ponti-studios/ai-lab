@@ -1,79 +1,51 @@
-# Mindsherpa API
+# ai-lab
 
-## Overview
+`ai-lab` is the internal AI systems lab for Ponti Studios — workers, evals,
+retrieval, prompts, pipelines, and benchmarks.
 
-Mindsherpa API is a REST interface for the Mindsherpa platform. This powerful
-application enables users to generate and manage focus items such as tasks,
-events, and emotions. These items can be created from both text and voice
-inputs. Additionally, users can engage with a chat interface that discusses
-topics while referencing their focus items.
+The repo is scoped to five domains:
 
-## Features
+- extraction workers
+- retrieval experiments
+- agent pipelines
+- evaluation harnesses
+- prompt contracts and model benchmarks
 
-- Generate focus items from text input
-- Generate focus items from voice input
-- Interactive chat interface that references focus items
-- RESTful API for seamless integration
+The production app API remains in
+`/Users/charlesponti/Developer/hominem/services/api`.
 
-## Requirements
+## Layout
 
-The Mindsherpa API relies on the following technologies:
+```text
+lab/                CLI entrypoints and shared lab runtime helpers
+workers/            extraction and retrieval worker notes / implementations
+pipelines/          orchestration pipelines and experiment flows
+evals/              fixtures and regression-oriented evaluation inputs
+prompts/            versioned prompt assets
+benchmarks/         provider and model comparison artifacts
+contracts/          prompt and runtime contract definitions
+archive/legacy_api/ retired FastAPI-era product backend snapshot
+```
 
-- Docker
-- Python 3.11
-- `uv` (Python package installer and resolver)
-- FastAPI
-- PostgreSQL
-- Langchain
-- OpenAI
-- Groq
-- Chroma
+## Quick start
 
-## Installation and Setup
+```bash
+python -m lab.cli worker smoke
+python -m lab.cli pipeline smoke
+python -m lab.cli eval run
+python -m lab.cli benchmark run
+python -m lab.cli contract validate contracts/prompt_contract.schema.json
+```
 
-To set up the Mindsherpa API locally, follow these steps:
+## Principles
 
-1. Clone the repository:
-   ```
-   git clone https://github.com/your-username/mindsherpa-api.git
-   cd mindsherpa-api
-   ```
+- This repo produces reusable AI workflow infrastructure, not app auth or user APIs.
+- Production systems should consume stable outputs from this repo rather than
+  reintroduce a monolithic product API here.
+- Experiments must be regression-testable through fixtures and contracts.
 
-2. Create and activate a virtual environment using `uv`:
-   ```
-   uv venv
-   source .venv/bin/activate  # On Windows, use `.venv\Scripts\activate`
-   ```
+## Legacy code
 
-3. Install dependencies:
-   ```
-   uv sync
-   ```
-
-4. Build and start the Docker containers:
-   ```
-   docker compose up --build -d
-   ```
-
-5. The API will be available at `http://localhost:8002`
-
-## Usage
-
-Once the application is running, you can interact with the API using your
-preferred HTTP client or integrate it into your application.
-
-[Consider adding some basic endpoint information or linking to more detailed API
-documentation]
-
-## Contributing
-
-We welcome contributions to the Mindsherpa API! If you're interested in helping
-improve this project, please [guidelines for contributing, if available].
-
-## License
-
-- [ ] Add a license file
-
-## Contact
-
-For questions, support, or feedback, please create an issue.
+The previous FastAPI application, routers, prompts, and tests have been moved to
+`archive/legacy_api/` so the old product surface remains inspectable without
+competing with the new lab charter.

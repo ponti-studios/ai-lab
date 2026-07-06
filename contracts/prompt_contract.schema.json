@@ -1,0 +1,13 @@
+{
+  "name": "extraction.prompt.contract",
+  "version": "1.0.0",
+  "inputs": {
+    "document_type": "string",
+    "text": "string"
+  },
+  "outputs": {
+    "name": "string | null",
+    "priority": "string | null",
+    "need": "string | null"
+  }
+}
